@@ -1369,6 +1369,56 @@ async def bili_unread_messages() -> str:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
+# ==== 2026-10-21：通知类工具只认「设置里要 @ 的那个人」（主人要求）====
+def _mentioned_only(items):
+    """只保留设置里 mentionName / mentionUid 对应的人发来的通知；没配就一条都不给。"""
+    try:
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+        with open(cfg_path, encoding='utf-8') as fp:
+            cfg = json.load(fp)
+    except Exception:
+        return []
+    who = str(cfg.get('mentionName') or '').strip()
+    uid = str(cfg.get('mentionUid') or '').strip()
+    if not who and not uid:
+        return []
+
+    def hit(node, depth=0):
+        if depth > 6:
+            return False
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == 'mid' and uid and str(v) == uid:
+                    return True
+                if (not uid) and k in ('uname', 'name', 'nickname') and isinstance(v, str) and who and v.strip() == who:
+                    return True
+                if hit(v, depth + 1):
+                    return True
+        elif isinstance(node, list):
+            for v in node:
+                if hit(v, depth + 1):
+                    return True
+        return False
+
+    return [it for it in (items or []) if hit(it)]
+
+
+def _filter_notice(payload):
+    """把 get_at / get_replies 的返回过滤成「只有那个人」。"""
+    if isinstance(payload, dict):
+        out = dict(payload)
+        for key in ('items', 'replies'):
+            if isinstance(out.get(key), list):
+                kept = _mentioned_only(out[key])
+                out['kept_' + key] = len(kept)
+                out[key] = kept
+        return out
+    if isinstance(payload, list):
+        kept = _mentioned_only(payload)
+        return {'items': kept, 'kept_items': len(kept)}
+    return payload
+
+
 # ========== Tool 23: 最近收到的回复 ==========
 
 @tool()
@@ -1382,6 +1432,7 @@ async def bili_received_replies() -> str:
     cred = get_cred()
     try:
         result = await session.get_replies(credential=cred)
+        result = _filter_notice(result)
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -1407,6 +1458,10 @@ async def bili_received_at_and_likes() -> str:
         result["likes"] = await session.get_likes(credential=cred)
     except Exception as e:
         result["likes_error"] = str(e)
+    for _k in ('at', 'likes'):
+        if _k in result:
+            result[_k] = _filter_notice(result[_k])
+    result['filter'] = '只保留设置里「要 @ 谁」那个人的通知'
     return json.dumps(result, ensure_ascii=False)
 
 

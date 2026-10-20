@@ -157,6 +157,7 @@ window.__ModuleLoader__.load({
       const [dmUid, setDmUid] = React.useState(null)        // 私信收件人 UID（本地草稿）
       const [dmMode, setDmMode] = React.useState(null)      // 投递方式：off / only / both
       const [mention, setMention] = React.useState(null)
+  const [mentionUid, setMentionUid] = React.useState(null)   // 只认这个 UID 的 @（本地草稿）
       const [login, setLogin] = React.useState(null)
       const [runNote, setRunNote] = React.useState(null)
       const [report, setReport] = React.useState(null)        // 非 null = 报告已展开   // 顶部那行状态（跑一轮/装依赖的反馈原来在最底下，看不见）
@@ -180,6 +181,7 @@ window.__ModuleLoader__.load({
         if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))
         if (cfg && replyPer === null) setReplyPer(String(cfg.replyPerRound ?? 1))
         if (cfg && mention === null) setMention(cfg.mentionName || '')
+  if (cfg && mentionUid === null) setMentionUid(cfg.mentionUid ? String(cfg.mentionUid) : '')
         if (cfg && dmUid === null) setDmUid(cfg.dmUid ? String(cfg.dmUid) : '')
         if (cfg && dmMode === null) setDmMode(cfg.dmMode || 'off')
         if (cfg && favId === null) setFavId(String(cfg.favFolderId ?? 0))
@@ -458,6 +460,14 @@ window.__ModuleLoader__.load({
                 onBlur: () => { const n = Math.max(1, Math.min(Number(replyPer) || 1, 10)); setReplyPer(String(n)); patch({ replyPerRound: n }, '每轮几条回复') },
               }))) : null,
           h(ToggleRow, {
+            label: '有人 @ 我就立刻回',
+            note: '默认关。开了之后宿主每两分钟查一次 @ 通知（纯读，不花 token），只有真的有人 @ 你，才起一个小回合去写那条回复（30~90 秒到）',
+            on: sw('mentionAutoReply'),
+            onChange: (v) => patch({ mentionAutoReply: v }, '@ 自动回复'),
+          }),
+          sw('mentionAutoReply') ? h('div', { 'data-bd-sub': '' },
+            h('div', { 'data-bd-note': '' }, '只会回「只回哪个 UID 的 @」那个号 —— 别人 @ 连通知都拿不到。没填 UID 的话这个开关不会生效。')) : null,
+          h(ToggleRow, {
             label: '自动评论并 @ 你',
             note: '默认关；开了之后它会在挑中的视频下面留评论，并 @ 你填的那个人',
             on: sw('autoComment'),
@@ -482,6 +492,14 @@ window.__ModuleLoader__.load({
               onChange: (e) => setMention(e.target.value),
               onBlur: () => { const v = String(mention || '').trim(); setMention(v); patch({ mentionName: v }, '要 @ 谁') },
             }),
+            h('div', { 'data-bd-label': '' }, '只回哪个 UID 的 @（可选，数字）'),
+            h('input', {
+              'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0, value: mentionUid ?? '',
+              placeholder: '填你自己的 B站 数字 UID；填了之后只认这个号的 @，0 = 按上面的昵称匹配',
+              onChange: (e) => setMentionUid(e.target.value),
+              onBlur: () => { const n = Math.max(0, Number(mentionUid) || 0); setMentionUid(n ? String(n) : ''); patch({ mentionUid: n }, '只回哪个 UID 的 @') },
+            }),
+            h('div', { 'data-bd-note': '' }, '建议填上 —— 昵称别人可以改成一样，UID 不会。填了之后别人的 @ 连通知都拿不到'),
             h('div', { 'data-bd-note': '' }, '留空的话它就不发评论了 —— 因为评论存在的意义就是 @ 那一下')) : null,
           h('div', { 'data-bd-label': '' }, '投递方式（评论 还是 私信）'),
           h('select', {
