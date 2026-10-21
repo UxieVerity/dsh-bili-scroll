@@ -158,6 +158,7 @@ window.__ModuleLoader__.load({
       const [dmMode, setDmMode] = React.useState(null)      // 投递方式：off / only / both
       const [mention, setMention] = React.useState(null)
   const [mentionUid, setMentionUid] = React.useState(null)   // 只认这个 UID 的 @（本地草稿）
+  const [dmUids, setDmUids] = React.useState(null)           // 私信回复名单（逗号分隔的文本草稿）
       const [login, setLogin] = React.useState(null)
       const [runNote, setRunNote] = React.useState(null)
       const [report, setReport] = React.useState(null)        // 非 null = 报告已展开   // 顶部那行状态（跑一轮/装依赖的反馈原来在最底下，看不见）
@@ -182,6 +183,7 @@ window.__ModuleLoader__.load({
         if (cfg && replyPer === null) setReplyPer(String(cfg.replyPerRound ?? 1))
         if (cfg && mention === null) setMention(cfg.mentionName || '')
   if (cfg && mentionUid === null) setMentionUid(cfg.mentionUid ? String(cfg.mentionUid) : '')
+  if (cfg && dmUids === null) setDmUids((cfg.dmReplyUids || []).join(', '))
         if (cfg && dmUid === null) setDmUid(cfg.dmUid ? String(cfg.dmUid) : '')
         if (cfg && dmMode === null) setDmMode(cfg.dmMode || 'off')
         if (cfg && favId === null) setFavId(String(cfg.favFolderId ?? 0))
@@ -519,6 +521,25 @@ window.__ModuleLoader__.load({
             }),
             h('div', { 'data-bd-note': '' }, '私信内容 = 本轮每条的「标题 + 链接 + 一句话」，一轮合并成一条发（不受 150 字限制）'),
             h('div', { 'data-bd-note': '' }, '⚠️ 建议先让这个号和收件人互关：B站 对「陌生人私信」会限流，还可能不弹提醒')) : null,
+          h(ToggleRow, {
+            label: '有人给我发私信就自动回',
+            note: '默认关。开了之后每两分钟查一次私信（纯读），只回下面名单里的人；别人的私信连读都不读',
+            on: sw('dmAutoReply'),
+            onChange: (v) => patch({ dmAutoReply: v }, '私信自动回复'),
+          }),
+          sw('dmAutoReply') ? h('div', { 'data-bd-sub': '' },
+            h('div', { 'data-bd-label': '' }, '只回这些 UID 的私信（逗号分隔）'),
+            h('input', {
+              'data-bd-input': '', value: dmUids ?? '',
+              placeholder: '例如 17179891, 12345678；留空 = 谁都不回',
+              onChange: (e) => setDmUids(e.target.value),
+              onBlur: () => {
+                const arr = String(dmUids || '').split(/[,，\s]+/).map((x) => x.trim()).filter((x) => /^\d+$/.test(x))
+                setDmUids(arr.join(', '))
+                patch({ dmReplyUids: arr }, '私信回复名单')
+              },
+            }),
+            h('div', { 'data-bd-note': '' }, '名单外的人发私信：检查器根本不会去读那个会话，服务器端也拒收 —— 两道闸')) : null,
           h(ToggleRow, {
             label: '本地转写没字幕的视频',
             note: '默认关；开了以后，没字幕的视频会在本机转写一遍（不花 API 钱）',

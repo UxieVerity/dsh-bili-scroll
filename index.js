@@ -72,6 +72,10 @@ export const Config = !z ? undefined : z.object({
   mentionUid: z.natural().default(0).extra('volatile', true),
   /** ⭐ @ 即时回复（2026-10-21 主人选的 B 方案）：宿主每两分钟查一次通知，真有新 @ 才起一个轻量回合去回 */
   mentionAutoReply: z.boolean().default(false).extra('volatile', true),
+  /** ⭐ 私信即时回复（2026-10-22）：只回 dmReplyUids 名单里那些人发来的私信，别人一律不回 */
+  dmAutoReply: z.boolean().default(false).extra('volatile', true),
+  /** ⭐ 允许回的私信 UID 名单（数字字符串）；空 = 谁都不回 */
+  dmReplyUids: z.array(z.string()).default([]).extra('volatile', true),
   /** 关注关键词（空了用章程里默认那几组） */
   keywords: z.array(z.string()).default([]).extra('volatile', true),
   /** Python：指向 venv 里的那个最好 */
@@ -200,7 +204,7 @@ export function apply(ctx, config) {
    */
   const DEFAULTS = {
     perDay: 5, peakValley: false, noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
-    dmMode: 'off', dmUid: 0,
+    dmMode: 'off', dmUid: 0, dmAutoReply: false, dmReplyUids: [],
     keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, mentionAutoReply: false, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1, favFolderId: 0,
   }
   const normalize = (src, base) => {
@@ -950,6 +954,8 @@ export function apply(ctx, config) {
     //   模型手里压根没有这只工具 ⇒ 表现成"开关也开了、这一轮也跑了，但从来没发出去过" ✗
     //   ⇒ dmMode 不是 off、且填了收件人 UID 才放进去（关着就不给，白名单别松）
     if (String(cfg.dmMode || 'off') !== 'off' && Number(cfg.dmUid) > 0) list.push('bili_send_message')
+    // ⭐ 2026-10-22：私信即时回复也要这只手（名单非空才给；真正的名单校验在 mcp_server 里）
+    if (cfg.dmAutoReply && (cfg.dmReplyUids || []).length > 0) list.push('bili_send_message')
     return list
   }
 
@@ -1119,7 +1125,7 @@ export function apply(ctx, config) {
     child.stderr?.on('data', pick)
     child.on('exit', (code) => {
       log(`刷B站结束（${why}，code=${code}）`)
-      const isDutyRound = why !== 'mention'   // @ 回复那一小回合不写报告、不收藏、不复核
+      const isDutyRound = why !== 'mention' && why !== 'dm'   // @ / 私信回复那一小回合不写报告、不收藏、不复核
       if (isDutyRound) stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
     // ⭐ 2026-10-20：这一轮跑成了、并且使用者选了收藏夹 ⇒ 把挑中的存进去（后台做，别拖住收尾）
     if (isDutyRound && code === 0 && Number(cfg.favFolderId) > 0) {
@@ -1264,6 +1270,82 @@ export function apply(ctx, config) {
     mentionTimer.unref?.()
     ctx.effect(() => () => clearInterval(mentionTimer), 'bili-duty: @ 即时回复监听')
   } catch (e) { log('@ 监听定时器没起来：' + (e && e.message ? e.message : e)) }
+
+  /* ─────────────── 私信即时回复（2026-10-22 主人要求：只回指定 UID 名单）─────────────── */
+  /**
+   * ⭐ 需求：评论区被限流时，私信是唯一靠得住的通道；但只许回名单里的人。
+   *   同样拆两步：① bili_dm_check.py 纯读（只读名单内 UID 的会话）② 有新的才起轻量回合去回。
+   *   ⚠️ 名单在**两处**把关：检查器只读名单内的人；mcp_server 的 bili_send_message 也拒绝名单外收件人。
+   */
+  const dmDoneFile = join(stateDir, 'dm-done.json')
+  let lastDmAt = 0
+
+  const readDmDone = () => {
+    try { const j = readJson(dmDoneFile, {}); return new Set((j.done || []).map(String)) } catch { return new Set() }
+  }
+  const markDmDone = (keys) => {
+    try {
+      const cur = readDmDone()
+      for (const k of keys) cur.add(String(k))
+      writeJson(dmDoneFile, { done: Array.from(cur).slice(-800) })
+    } catch (e) { log('写 dm-done 失败：' + (e && e.message ? e.message : e)) }
+  }
+
+  const dmPrompt = (items) => {
+    const lines = [
+      '你正在处理「B站 私信」的即时回复任务 —— 别写报告、别发公开评论、别动判重表。',
+      '',
+      '下面这些私信是新收到的（只来自被允许的名单）：',
+    ]
+    items.forEach((x, i) => {
+      lines.push((i + 1) + '. uid=' + x.uid + ' 正文：' + x.text)
+    })
+    lines.push('')
+    lines.push('要做的事：用 bili_send_message(receiver_uid=uid, text=...)，一个人一条，别漏也别重复。')
+    lines.push('要求：正文 ≤100 字、开头「ご主人様」、中文、自然回应对方说的话；不承诺功能、不透露隐私、不吵架、不贴代码、不写设置项名字。')
+    lines.push('对方要你查什么、看什么视频，如果能用工具看清就先看清再回答；看不到就老实说没看到，别编。')
+    lines.push('❌ 绝不许发给名单以外的人；发完就结束。')
+    return lines.join(String.fromCharCode(10))
+  }
+
+  const dmTick = () => {
+    try {
+      refreshCfg()
+      if (!cfg.dmAutoReply) return
+      if (!(cfg.dmReplyUids || []).length) return
+      const now = Date.now()
+      if (now - lastDmAt < 120000) return
+      lastDmAt = now
+      const script = join(stateDir, 'bili_dm_check.py')
+      if (!existsSync(script)) return
+      const py = String(cfg.pythonPath || 'python')
+      const child = spawn(py, [script], { cwd: stateDir, env: pyEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      let outTxt = ''
+      const killer = setTimeout(() => { try { child.kill() } catch { /* 已退出 */ } }, 45000)
+      child.stdout?.on('data', (c) => { outTxt += String(c) })
+      child.on('exit', () => {
+        clearTimeout(killer)
+        try {
+          const line = outTxt.trim().split(String.fromCharCode(10)).filter(Boolean).pop() || '{}'
+          const res = JSON.parse(line)
+          if (!res || !res.ok || !Array.isArray(res.new) || !res.new.length) return
+          const items = res.new.filter((x) => x && x.uid && x.msg_key)
+          if (!items.length) return
+          log('发现 ' + items.length + ' 条新私信，起一个回复回合')
+          markDmDone(items.map((x) => x.msg_key))
+          runDuty('dm', dmPrompt(items))
+        } catch (e) { log('私信检查结果解析失败：' + (e && e.message ? e.message : e)) }
+      })
+    } catch (e) {
+      log('私信检查这一跳出错（已兜住）：' + (e && e.stack ? e.stack : e))
+    }
+  }
+
+  try {
+    const dmTimer = setInterval(dmTick, 60000)
+    dmTimer.unref?.()
+    ctx.effect(() => () => clearInterval(dmTimer), 'bili-duty: 私信即时回复监听')
+  } catch (e) { log('私信监听定时器没起来：' + (e && e.message ? e.message : e)) }
 
   /* ─────────────── HTTP（设置页用） ─────────────── */
 
@@ -1680,7 +1762,7 @@ export function apply(ctx, config) {
       const body = await readBody(req)
       const patch = {}
       for (const k of ['perDay', 'peakValley', 'noon', 'night', 'autoComment', 'transcribe', 'asrModel',
-        'commentPerRound', 'mentionName', 'mentionUid', 'mentionAutoReply', 'dmMode', 'dmUid',
+        'commentPerRound', 'mentionName', 'mentionUid', 'mentionAutoReply', 'dmMode', 'dmUid', 'dmAutoReply', 'dmReplyUids',
         'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'workspace', 'reportLevel', 'replyToComments', 'replyPerRound']) {
         if (k in body) patch[k] = body[k]
       }

@@ -1332,6 +1332,29 @@ async def bili_send_message(receiver_uid: int, text: str) -> str:
     """
     cred = get_cred()
 
+    # ⭐ 2026-10-22 主人要求：私信只能发给「被允许的人」——
+    #   允许集合 = dmReplyUids（私信回复名单）∪ {dmUid}（值班轮投递对象）。
+    #   名单为空时保持旧行为（此时这只手通常也没被放进白名单）。
+    try:
+        _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+        with open(_cfg_path, encoding='utf-8') as _fp:
+            _cfg = json.load(_fp)
+        _allow = set()
+        for _x in (_cfg.get('dmReplyUids') or []):
+            try:
+                _allow.add(int(str(_x).strip()))
+            except Exception:
+                pass
+        try:
+            if int(_cfg.get('dmUid') or 0) > 0:
+                _allow.add(int(_cfg.get('dmUid')))
+        except Exception:
+            pass
+        if _allow and int(receiver_uid) not in _allow:
+            return json.dumps({"success": False, "error": "收件人 %s 不在允许名单（dmReplyUids）里" % receiver_uid}, ensure_ascii=False)
+    except Exception:
+        pass
+
     if not text or not text.strip():
         return json.dumps({"success": False, "error": "text 不能为空"}, ensure_ascii=False)
 
