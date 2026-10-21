@@ -1313,6 +1313,7 @@ export function apply(ctx, config) {
       refreshCfg()
       if (!cfg.dmAutoReply) return
       if (!(cfg.dmReplyUids || []).length) return
+      if (watcherAlive()) return   // ⭐ 实时进程活着就不轮询（它 6 秒拉一次，更快）
       const now = Date.now()
       if (now - lastDmAt < 15000) return           // 同上：20 秒一跳
       lastDmAt = now
@@ -1346,6 +1347,96 @@ export function apply(ctx, config) {
     dmTimer.unref?.()
     ctx.effect(() => () => clearInterval(dmTimer), 'bili-duty: 私信即时回复监听')
   } catch (e) { log('私信监听定时器没起来：' + (e && e.message ? e.message : e)) }
+
+  /* ─────────────── 私信实时监听（常驻进程，2026-10-22）─────────────── */
+  /**
+   * ⭐ 比 20 秒轮询更快的方案：bili_watch.py 常驻，内部 6 秒拉一次私信事件，
+   *   名单内的人发来就写一行 dm-queue.jsonl；宿主 3 秒看一次队列，有就直接起回合。
+   *   原来那套 20 秒轮询**保留当兜底**：实时进程退出/卡死时自动接管。
+   */
+  const dmQueueFile = join(stateDir, 'dm-queue.jsonl')
+  const dmHeartFile = join(stateDir, 'dm-watch.heartbeat')
+  let watchChild = null
+  let watchRestartAt = 0
+
+  const watcherWanted = () => Boolean(cfg.dmAutoReply && (cfg.dmReplyUids || []).length > 0)
+  const watcherAlive = () => {
+    try {
+      const beat = readJson(dmHeartFile, {})
+      const ts = Number(beat.ts || 0)
+      return ts > 0 && (Date.now() / 1000 - ts) < 40
+    } catch { return false }
+  }
+  const startWatcher = () => {
+    try {
+      if (watchChild) return
+      if (!watcherWanted()) return
+      if (Date.now() < watchRestartAt) return
+      const script = join(stateDir, 'bili_watch.py')
+      if (!existsSync(script)) return
+      const py = String(cfg.pythonPath || 'python')
+      const child = spawn(py, [script], { cwd: stateDir, env: pyEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      watchChild = child
+      child.stdout?.on('data', (c) => log('[watch] ' + String(c).trim().slice(0, 160)))
+      child.stderr?.on('data', (c) => log('[watch:err] ' + String(c).trim().slice(0, 160)))
+      child.on('exit', (code) => {
+        log('私信监听进程退出（code=' + code + '），10 秒后重试')
+        watchChild = null
+        watchRestartAt = Date.now() + 10000
+      })
+      log('私信实时监听已启动')
+    } catch (e) { log('启动私信监听失败：' + (e && e.message ? e.message : e)) }
+  }
+
+  const readDmQueue = () => {
+    try {
+      if (!existsSync(dmQueueFile)) return []
+      const raw = readFileSync(dmQueueFile, 'utf8')
+      const out = []
+      for (const line of raw.split(String.fromCharCode(10))) {
+        const s = line.trim()
+        if (!s) continue
+        try { out.push(JSON.parse(s)) } catch { /* 半行，跳过 */ }
+      }
+      return out
+    } catch { return [] }
+  }
+  const clearDmQueue = () => { try { writeFileSync(dmQueueFile, '', 'utf8') } catch { /* 清不掉就算了 */ } }
+
+  const dmPick = () => {
+    try {
+      refreshCfg()
+      startWatcher()
+      if (!watcherWanted()) return
+      const allow = new Set((cfg.dmReplyUids || []).map(String))
+      const done = readDmDone()
+      const raw = readDmQueue()
+      const seen = new Set()
+      const items = []
+      for (const x of raw) {
+        if (!x || !x.uid || !x.msg_key) continue
+        const uid = String(x.uid); const key = String(x.msg_key)
+        if (!allow.has(uid) || done.has(key) || seen.has(key)) continue
+        seen.add(key); items.push(x)
+      }
+      if (!items.length) { if (raw.length) clearDmQueue(); return }
+      log('实时监听到 ' + items.length + ' 条新私信，起一个回复回合')
+      markDmDone(items.map((x) => x.msg_key))
+      clearDmQueue()
+      runDuty('dm', dmPrompt(items))
+    } catch (e) { log('私信取队列出错（已兜住）：' + (e && e.stack ? e.stack : e)) }
+  }
+
+  try {
+    const dmPickTimer = setInterval(dmPick, 3000)
+    dmPickTimer.unref?.()
+    ctx.effect(() => () => {
+      clearInterval(dmPickTimer)
+      try { watchChild?.kill() } catch { /* 已经退了 */ }
+      watchChild = null
+    }, 'bili-duty: 私信实时监听')
+    setTimeout(() => { try { startWatcher() } catch { /* 起不来下次 tick 再试 */ } }, 3000)?.unref?.()
+  } catch (e) { log('私信实时监听起不来：' + (e && e.message ? e.message : e)) }
 
   /* ─────────────── HTTP（设置页用） ─────────────── */
 
