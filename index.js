@@ -1208,7 +1208,7 @@ export function apply(ctx, config) {
 
   const mentionPrompt = (items) => {
     const lines = [
-      '你正在处理一条「B站 @ 通知」的即时回复任务 —— 不是刷视频那一轮：别搜视频、别写报告、别发别的评论、别动判重表。',
+      '你正在处理一条「B站 @ 通知」的即时回复任务 —— 别写报告、别发别的评论、别动判重表（那些是值班轮的事），但**该看的要看**。',
       '',
       '下面这些 @ 是新的、还没回过：',
     ]
@@ -1218,7 +1218,9 @@ export function apply(ctx, config) {
     lines.push('')
     lines.push('要做的事：用 bili_reply 回一条楼中楼（rpid=评论id，root=同一个评论id）。有好几个人就一人一条，别漏也别重复。')
     lines.push('要求：正文 ≤100 字、开头「ご主人様」、中文、自然回应对方那句话；不承诺功能、不透露隐私、不吵架、不贴代码、不写设置项名字。')
-    lines.push('对方只是打个招呼或测试的话，回一句简短、有人味的就好，别绕弯子。')
+    lines.push('如果对方说的是「看看这个 / 这个怎么样 / 帮我看看 / 你看这个」这类 —— **先看内容再回**：先用 bili_subtitle 读字幕原文；没字幕就 bili_comments 扫一眼评论区。')
+    lines.push('回复必须针对视频的**实际内容**（到底讲了什么、值不值得看），**不许拿标题瞎猜、不许编** —— 没看到内容就老实说没看到。')
+    lines.push('如果对方只是打招呼或测试（「test」「功能测试」「在吗」），不用看视频，简短回一句就行。')
     lines.push('回完就结束，不要再多做任何事。')
     return lines.join(String.fromCharCode(10))
   }
