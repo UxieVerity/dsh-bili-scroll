@@ -1238,7 +1238,7 @@ export function apply(ctx, config) {
       if (!Number(cfg.mentionUid || 0)) return
       if (cfg.dmMode === 'only') return
       const now = Date.now()
-      if (now - lastMentionAt < 120000) return
+      if (now - lastMentionAt < 15000) return      // 20 秒一跳、15 秒闸：防止上一跳没跑完又起一个
       lastMentionAt = now
       const script = join(stateDir, 'bili_at_check.py')
       if (!existsSync(script)) return
@@ -1266,7 +1266,7 @@ export function apply(ctx, config) {
   }
 
   try {
-    const mentionTimer = setInterval(mentionTick, 60000)
+    const mentionTimer = setInterval(mentionTick, 20000)
     mentionTimer.unref?.()
     ctx.effect(() => () => clearInterval(mentionTimer), 'bili-duty: @ 即时回复监听')
   } catch (e) { log('@ 监听定时器没起来：' + (e && e.message ? e.message : e)) }
@@ -1314,7 +1314,7 @@ export function apply(ctx, config) {
       if (!cfg.dmAutoReply) return
       if (!(cfg.dmReplyUids || []).length) return
       const now = Date.now()
-      if (now - lastDmAt < 120000) return
+      if (now - lastDmAt < 15000) return           // 同上：20 秒一跳
       lastDmAt = now
       const script = join(stateDir, 'bili_dm_check.py')
       if (!existsSync(script)) return
@@ -1342,7 +1342,7 @@ export function apply(ctx, config) {
   }
 
   try {
-    const dmTimer = setInterval(dmTick, 60000)
+    const dmTimer = setInterval(dmTick, 20000)
     dmTimer.unref?.()
     ctx.effect(() => () => clearInterval(dmTimer), 'bili-duty: 私信即时回复监听')
   } catch (e) { log('私信监听定时器没起来：' + (e && e.message ? e.message : e)) }
